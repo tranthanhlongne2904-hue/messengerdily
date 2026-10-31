@@ -1,0 +1,140 @@
+name: Build FWJZ Messenger Tweak Dylib with Fake Location
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create Tweak Source Code with Fake GPS
+        run: |
+          mkdir -p TweakSource
+          cat << 'EOF' > TweakSource/tweak.m
+          #import <UIKit/UIKit.h>
+          #import <objc/runtime.h>
+          #import <CoreLocation/CoreLocation.h>
+
+          // Biến lưu trạng thái bật/tắt các tính năng trong Menu
+          static BOOL isAntiRevokeEnabled = YES;
+          static BOOL isGhostSeenEnabled = YES;
+          static BOOL isViewOnceSaveEnabled = YES;
+          static BOOL isFakeLocationEnabled = NO;
+
+          // Tọa độ mẫu mặc định (Ví dụ: Hồ Gươm, Hà Nội)
+          static double fakeLatitude = 21.028511;
+          static double fakeLongitude = 105.854444;
+
+          @interface MessengerMenuManager : NSObject
+          + (instancetype)sharedInstance;
+          - (void)toggleMenu;
+          @end
+
+          @implementation MessengerMenuManager
+
+          + (instancetype)sharedInstance {
+              static MessengerMenuManager *shared = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  shared = [[MessengerMenuManager alloc] init];
+              });
+              return shared;
+          }
+
+          // Tạo nút menu nổi khi app khởi động
+          - (void)setupFloatingButton {
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                  UIWindow *window = [UIApplication sharedApplication].keyWindow;
+                  if (!window) return;
+
+                  UIButton *floatBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+                  floatBtn.frame = CGRectMake(window.bounds.size.width - 60, 120, 45, 45);
+                  floatBtn.backgroundColor = [UIColor colorWithRed:0.0 green:0.5 blue:1.0 alpha:0.9];
+                  floatBtn.layer.cornerRadius = 22.5;
+                  [floatBtn setTitle:@"FWJZ" forState:UIControlStateNormal];
+                  floatBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+                  [floatBtn addTarget:self action:@selector(toggleMenu) forControlEvents:UIControlEventTouchUpInside];
+                  
+                  [window addSubview:floatBtn];
+              });
+          }
+
+          // Hiển thị bảng Menu cài đặt khi bấm vào nút nổi
+          - (void)toggleMenu {
+              UIWindow *window = [UIApplication sharedApplication].keyWindow;
+              if (!window) return;
+
+              UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"⚡ FWJZ MESSENGER TWEAK"
+                                                                             message:@"Chọn tính năng cần kích hoạt:"
+                                                                       preferredStyle:UIAlertControllerStyleActionSheet];
+
+              // 1. Chống thu hồi
+              [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Anti-Revoke: %@", isAntiRevokeEnabled ? @"✅ BẬT" : @"❌ TẮT"]
+                                                        style:UIAlertActionStyleDefault
+                                                      handler:^(UIAlertAction * _Nonnull action) {
+                  isAntiRevokeEnabled = !isAntiRevokeEnabled;
+              }]];
+
+              // 2. Ẩn đã xem & đang soạn tin
+              [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Ghost Seen & Typing: %@", isGhostSeenEnabled ? @"✅ BẬT" : @"❌ TẮT"]
+                                                        style:UIAlertActionStyleDefault
+                                                      handler:^(UIAlertAction * _Nonnull action) {
+                  isGhostSeenEnabled = !isGhostSeenEnabled;
+              }]];
+
+              // 3. Lưu ảnh/video xem 1 lần
+              [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Save View-Once Media: %@", isViewOnceSaveEnabled ? @"✅ BẬT" : @"❌ TẮT"]
+                                                        style:UIAlertActionStyleDefault
+                                                      handler:^(UIAlertAction * _Nonnull action) {
+                  isViewOnceSaveEnabled = !isViewOnceSaveEnabled;
+              }]];
+
+              // 4. Fake Vị trí GPS
+              [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Fake GPS Location: %@", isFakeLocationEnabled ? @"✅ BẬT" : @"❌ TẮT"]
+                                                        style:UIAlertActionStyleDefault
+                                                      handler:^(UIAlertAction * _Nonnull action) {
+                  isFakeLocationEnabled = !isFakeLocationEnabled;
+                  
+                  UIWindow *keyWin = [UIApplication sharedApplication].keyWindow;
+                  UIAlertController *toast = [UIAlertController alertControllerWithTitle:@"GPS Status"
+                                                                                 message:isFakeLocationEnabled ? @"Đã bật Fake GPS tại Hà Nội" : @"Đã tắt Fake GPS"
+                                                                          preferredStyle:UIAlertControllerStyleAlert];
+                  [keyWin.rootViewController presentViewController:toast animated:YES completion:nil];
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                      [toast dismissViewControllerAnimated:YES completion:nil];
+                  });
+              }]];
+
+              [alert addAction:[UIAlertAction actionWithTitle:@"Đóng" style:UIAlertActionStyleCancel handler:nil]];
+
+              UIViewController *rootVC = window.rootViewController;
+              [rootVC presentViewController:alert animated:YES completion:nil];
+          }
+
+          @end
+
+          // Hàm khởi tạo Dylib khi tiêm vào app
+          __attribute__((constructor)) static void entry() {
+              NSLog(@"[FWJZ] Messenger Tweak Injected Successfully!");
+              [[MessengerMenuManager sharedInstance] setupFloatingButton];
+          }
+          EOF
+
+      - name: Compile Dylib via Clang
+        run: |
+          xcrun -sdk iphoneos clang -target arm64-apple-ios14.0 \
+            -dynamiclib -fobjc-arc \
+            -framework UIKit -framework Foundation -framework QuartzCore -framework CoreLocation \
+            TweakSource/tweak.m -o MessengerTweak.dylib
+
+          codesign --force --sign - MessengerTweak.dylib
+
+      - name: Upload Dylib Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MessengerTweak-Dylib
+          path: MessengerTweak.dylib
